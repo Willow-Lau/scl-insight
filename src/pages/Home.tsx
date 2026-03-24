@@ -25,7 +25,7 @@ const Home = () => {
       {/* Header */}
       <header className="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-10">
         <div className="container max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-serif text-foreground">SCL-90</h1>
+          <h1 className="text-xl font-serif text-foreground text-right">SCL-90</h1>
           <nav className="flex gap-6 text-sm">
             <a href="/about" className="text-muted-foreground hover:text-foreground transition-colors">关于量表</a>
           </nav>
