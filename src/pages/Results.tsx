@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getAnswers, clearSession } from "@/lib/session";
 import { calculateResults, getInterpretation, FactorResult } from "@/lib/scoring";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
@@ -20,6 +21,9 @@ const Results = () => {
   const navigate = useNavigate();
   const [results, setResults] = useState<FactorResult[]>([]);
   const [tips, setTips] = useState<string[]>([]);
+  const saveLockRef = useRef(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     const answers = getAnswers();
@@ -31,6 +35,90 @@ const Results = () => {
     setResults(r);
     setTips(getInterpretation(r));
   }, [navigate]);
+
+  useEffect(() => {
+    if (results.length === 0) return;
+    if (saveLockRef.current) return;
+
+    let isCancelled = false;
+
+    const byFactor = results.reduce((acc, r) => {
+      acc[r.factor] = r;
+      return acc;
+    }, {} as Record<string, FactorResult>);
+
+    const overallTotalScore = results.reduce((sum, r) => sum + r.totalScore, 0);
+    const resultKey = [
+      `overall:${overallTotalScore}`,
+      ...results.map((r) => `${r.factor}:${r.totalScore}:${r.meanScore}:${r.statusLevel}`),
+    ].join("|");
+
+    const storageKey = `scl90:assessment_results:saved:${resultKey}`;
+
+    const save = async () => {
+      try {
+        saveLockRef.current = true;
+        setSaveState("saving");
+
+        if (!supabase) {
+          // 避免 supabase 为 null 时直接抛错导致渲染中断
+          const msg = "[Supabase] 客户端未初始化（请检查 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 是否被 Vite 注入）";
+          console.error(msg);
+          if (!isCancelled) {
+            setSaveState("error");
+            setSaveError(msg);
+          }
+          return;
+        }
+
+        if (typeof window !== "undefined") {
+          let existing: string | null = null;
+          try {
+            existing = window.sessionStorage.getItem(storageKey);
+          } catch (e) {
+            console.warn("[Supabase] sessionStorage 读取失败，继续尝试写入。", e);
+          }
+          if (existing) {
+            setSaveState("saved");
+            console.log("[Supabase] assessment_results 已存在（sessionStorage 命中，跳过再次保存）", { resultKey });
+            return;
+          }
+        }
+
+        const payload = {
+          total_score: overallTotalScore,
+          mean_score: parseFloat((overallTotalScore / 90).toFixed(2)),
+          factors_data: results,
+          interpretation_tips: tips
+        };
+
+        const { error } = await supabase
+          .from("assessment_results")
+          .insert(payload);
+
+        if (error) throw error;
+
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(storageKey, "1");
+        }
+
+        console.log("[Supabase] assessment_results 保存成功", { resultKey });
+        if (!isCancelled) setSaveState("saved");
+      } catch (err) {
+        console.error("[Supabase] assessment_results 保存失败", err);
+        if (!isCancelled) {
+          setSaveState("error");
+          setSaveError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    };
+
+    void save();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [results]);
 
   const handleRestart = () => {
     clearSession();
@@ -60,6 +148,14 @@ const Results = () => {
       </header>
 
       <main className="container max-w-4xl mx-auto px-6 py-12 fade-in-up">
+        {saveState !== "idle" && (
+          <p className="text-xs text-muted-foreground text-center mb-6" aria-live="polite">
+            {saveState === "saving" && "正在自动保存测评结果..."}
+            {saveState === "saved" && "测评结果已自动保存。"}
+            {saveState === "error" && "测评结果保存失败（不会影响查看）。"}
+          </p>
+        )}
+        {saveError && <span className="sr-only">{saveError}</span>}
         <div className="text-center mb-12">
           <h2 className="text-3xl font-serif text-foreground mb-3">您的 SCL-90 测评报告</h2>
           <p className="text-muted-foreground">以下是基于您的作答计算得出的 9 个因子分析结果</p>
